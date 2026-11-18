@@ -3,7 +3,6 @@ import re
 import logging
 from urllib.parse import urlparse
 import requests
-from .streamtape import resolve_streamtape
 
 logger = logging.getLogger(__name__)
 
@@ -46,22 +45,13 @@ def _normalize_cookie(raw: str) -> str:
         return "; ".join(clean_pairs)
     return raw
 
-def _is_valid_index_url(link: str) -> bool:
-    if not link or not isinstance(link, str) or not link.startswith("http"):
-        return False
-    lower = link.lower()
-    if "404page" in lower or "/404" in lower or "404." in lower:
-        return False
-    return True
-
 def resolve_filepress(url: str, cookie: str = "") -> dict:
-    """Resolve Filepress / Filebee link into direct download links."""
+    """Resolve Filepress / Filebee link directly into Google Drive download link."""
     raw = urlparse(url)
     file_id = raw.path.strip("/").split("/")[-1].split("?")[0].split("#")[0]
     if not file_id:
         raise ValueError("Invalid Filepress URL: could not extract file ID")
 
-    # If cookie not passed, check environment variable FILEPRESS_COOKIE
     effective_cookie = _normalize_cookie(cookie) or _normalize_cookie(os.environ.get("FILEPRESS_COOKIE", ""))
 
     origin = f"{raw.scheme}://{raw.netloc}" if raw.netloc else "https://new4.filepress.lat"
@@ -106,7 +96,6 @@ def resolve_filepress(url: str, cookie: str = "") -> dict:
                             pass
                 except Exception as e:
                     logger.debug("curl_cffi POST %s failed: %s", endpoint, e)
-        # Fallback to requests
         try:
             r = requests.post(endpoint, headers=headers, json=payload, timeout=timeout)
             if r.text:
@@ -134,76 +123,25 @@ def resolve_filepress(url: str, cookie: str = "") -> dict:
             return val
         return None
 
-    index_link = None
-    streamtape_link = None
-    streamtape_raw = None
-    alt_links = {}
     gdrive_link = None
+    methods = ["publicUserDownlaod", "publicDownlaod"] if effective_cookie else ["publicDownlaod", "publicUserDownlaod"]
 
-    # 1. Index Download (Index step 1 + step 2)
-    for base in bases:
-        api1 = f"{base}/api/file/downlaod/"
-        api2 = f"{base}/api/file/downlaod2/"
-        j1 = _post(api1, {"id": file_id, "method": "indexDownlaod"}, timeout=12)
-        if j1 and j1.get("status") and j1.get("data"):
-            token = j1["data"]
-            direct = _first_url(token)
-            if direct and _is_valid_index_url(direct):
-                index_link = direct
-                break
-            # Step 2
-            j2 = _post(api2, {"id": token, "method": "indexDownlaod"}, timeout=12)
-            if j2 and j2.get("status") and j2.get("data"):
-                direct2 = _first_url(j2["data"])
-                if direct2 and _is_valid_index_url(direct2):
-                    index_link = direct2
-                    break
-        if index_link:
-            break
-
-    # 2. StreamTape Download
-    for base in bases:
-        api1 = f"{base}/api/file/downlaod/"
-        j_st = _post(api1, {"id": file_id, "method": "streamTapeDownload"}, timeout=10)
-        if j_st and j_st.get("status") and j_st.get("data"):
-            st_val = _first_url(j_st["data"]) or (j_st["data"] if isinstance(j_st["data"], str) and j_st["data"].startswith("http") else None)
-            if st_val:
-                streamtape_raw = st_val
-                # Do NOT pre-resolve StreamTape on Vercel because StreamTape links (get_video?id=...&token=...&ip=...)
-                # are IP-locked to the requester's IP! If resolved on Vercel, client/bot requests get HTTP 403.
-                # Returning streamtape_raw (https://streamtape.to/v/{id}) allows the client/bot to resolve it locally with its own IP.
-                break
-
-    # 3. Alternative Mirrors (DoodStream / StreamWish)
-    for method in ["doodStreamDownload", "streamWishDownload"]:
-        for base in bases:
-            j_alt = _post(f"{base}/api/file/downlaod/", {"id": file_id, "method": method}, timeout=8)
-            if j_alt and j_alt.get("status") and j_alt.get("data"):
-                val = _first_url(j_alt["data"]) or (j_alt["data"] if isinstance(j_alt["data"], str) and j_alt["data"].startswith("http") else None)
-                if val:
-                    alt_links[method] = val
-                    break
-
-    # 4. Google Drive Download (publicDownlaod works for guests; publicUserDownlaod works with cookie)
-    methods = ["publicDownlaod"]
-    if effective_cookie:
-        methods.insert(0, "publicUserDownlaod")
     for base in bases:
         api1 = f"{base}/api/file/downlaod/"
         api2 = f"{base}/api/file/downlaod2/"
         for method in methods:
             j_gd = _post(api1, {"id": file_id, "method": method}, timeout=12)
             if j_gd and j_gd.get("status") and j_gd.get("data"):
-                gd_val = _first_url(j_gd["data"])
-                if gd_val and _is_valid_index_url(gd_val):
-                    gdrive_link = gd_val
-                    break
-                # 2-step MongoDB ID to Google Drive ID
                 tok = j_gd["data"]
+                val = _first_url(tok)
+                if val:
+                    gdrive_link = val
+                    break
+                # Step 2: MongoDB ObjectId to Google Drive ID
                 j_gd2 = _post(api2, {"id": tok, "method": method}, timeout=10)
                 if j_gd2 and j_gd2.get("status") and j_gd2.get("data"):
                     gd2_val = _first_url(j_gd2["data"]) or j_gd2["data"]
-                    if isinstance(gd2_val, str) and gd2_val.startswith("http") and _is_valid_index_url(gd2_val):
+                    if isinstance(gd2_val, str) and gd2_val.startswith("http"):
                         gdrive_link = gd2_val
                         break
                     elif isinstance(gd2_val, str) and len(gd2_val) >= 20:
@@ -214,42 +152,23 @@ def resolve_filepress(url: str, cookie: str = "") -> dict:
         if gdrive_link:
             break
 
-    valid_index = index_link if _is_valid_index_url(index_link) else None
-
-    links = {}
-    if gdrive_link:
-        links["GoogleDrive"] = gdrive_link
-    if valid_index:
-        links["Direct"] = valid_index
-        links["Index"] = valid_index
-    if streamtape_raw:
-        links["StreamTape"] = streamtape_raw
-    for k, v in alt_links.items():
-        if v and _is_valid_index_url(v):
-            links[k] = v
-
-    primary = gdrive_link or valid_index or streamtape_raw or next((v for v in alt_links.values() if v and _is_valid_index_url(v)), None)
-    if not primary:
+    if not gdrive_link:
         if last_err_code == "FILE_NOT_FOUND":
             raise ValueError("Filepress error: File not found or deleted on Filepress (FILE_NOT_FOUND)")
         if last_err_code == "DRIVE_NOT_CONNECTED":
-            raise ValueError("Filepress error: Google Drive is not connected to your Filepress account (DRIVE_NOT_CONNECTED)")
-        if last_err_code == "LOGIN_REQUIRED":
-            raise ValueError("Filepress error: Login cookie required for this file. Public mirrors (Index/StreamTape) are unavailable.")
-        if last_err_code == "INDEX_CLONE_FAILED":
-            if not effective_cookie:
-                raise ValueError("Filepress error: Index mirror clone failed (INDEX_CLONE_FAILED). A Filepress login cookie is required to access Google Download.")
-            else:
-                raise ValueError(f"Filepress error: Index mirror failed and Google Download returned: {last_err_msg or last_err_code}")
-        err_msg = last_err_msg or last_err_code or "No downloadable mirror returned by Filepress"
+            raise ValueError("Filepress error: Google Drive is not connected to your Filepress account! (DRIVE_NOT_CONNECTED)")
+        if last_err_code == "LOGIN_REQUIRED" or (not effective_cookie and last_err_code == "METHOD_NOT_FOUND"):
+            raise ValueError("Filepress error: Login cookie required for this file! Upload your Filepress cookies as private file 'filepress.txt' (/bsetting -> Private Files) or set FILEPRESS_COOKIE.")
+        err_msg = last_err_msg or last_err_code or "Failed to generate Google Drive link"
         raise ValueError(f"Filepress error: {err_msg}")
 
     return {
         "success": True,
-        "url": primary,
-        "direct_url": gdrive_link or valid_index or streamtape_raw or primary,
-        "streamtape_url": streamtape_raw,
+        "url": gdrive_link,
+        "direct_url": gdrive_link,
         "gdrive_url": gdrive_link,
         "file_id": file_id,
-        "links": links,
+        "links": {
+            "GoogleDrive": gdrive_link
+        },
     }
