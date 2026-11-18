@@ -9,7 +9,7 @@ Bypasses Cloudflare WAF and datacenter IP blocks by serving requests from clean 
 ## 🚀 1-Click Vercel Deploy
 
 1. Go to [Vercel](https://vercel.com) and click **"Add New..."** -> **"Project"**.
-2. Select your repository: **`RDX-EXPART/Rdx-Bypass`**.
+2. Select your repository: **`RDX-EXPART/rdx-bypass-api`**.
 3. Keep default settings (Framework: **Other**, Root Directory: `./`).
 4. Click **Deploy**.
 5. Your API will be live at: `https://<your-project-name>.vercel.app`
