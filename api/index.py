@@ -113,7 +113,7 @@ async def bypass_get(url: str = Query(..., description="Target file URL"), dl: b
         return res
     except Exception as e:
         logger.warning("Bypass failed for %s: %s", url, e)
-        return JSONResponse(status_code=400, content={"success": False, "error": str(e)})
+        return JSONResponse(status_code=200, content={"success": False, "error": str(e)})
 
 @router.post("/bypass")
 async def bypass_post(payload: UrlPayload):
@@ -124,21 +124,21 @@ async def bypass_post(payload: UrlPayload):
         return res
     except Exception as e:
         logger.warning("Bypass failed for %s: %s", payload.url, e)
-        return JSONResponse(status_code=400, content={"success": False, "error": str(e)})
+        return JSONResponse(status_code=200, content={"success": False, "error": str(e)})
 
 @router.get("/ouo")
 @router.post("/ouo")
 async def endpoint_ouo(url: str = "", dl: bool = False, payload: Optional[UrlPayload] = None):
     target = payload.url if payload else url
     if not target:
-        raise HTTPException(status_code=400, detail="Missing required 'url' parameter")
+        return JSONResponse(status_code=200, content={"success": False, "error": "Missing required 'url' parameter"})
     try:
         res = await resolve_ouo_async(target)
         if (payload.dl if payload else dl) and res.get("url"):
             return RedirectResponse(url=res["url"], status_code=302)
         return res
     except Exception as e:
-        return JSONResponse(status_code=400, content={"success": False, "error": str(e)})
+        return JSONResponse(status_code=200, content={"success": False, "error": str(e)})
 
 @router.get("/filepress")
 @router.post("/filepress")
@@ -146,42 +146,42 @@ def endpoint_filepress(url: str = "", dl: bool = False, cookie: str = "", payloa
     target = payload.url if payload else url
     ck = (payload.cookie if payload else "") or cookie
     if not target:
-        raise HTTPException(status_code=400, detail="Missing required 'url' parameter")
+        return JSONResponse(status_code=200, content={"success": False, "error": "Missing required 'url' parameter"})
     try:
         res = resolve_filepress(target, cookie=ck)
         if (payload.dl if payload else dl) and res.get("url"):
             return RedirectResponse(url=res["url"], status_code=302)
         return res
     except Exception as e:
-        return JSONResponse(status_code=400, content={"success": False, "error": str(e)})
+        return JSONResponse(status_code=200, content={"success": False, "error": str(e)})
 
 @router.get("/hubcloud")
 @router.post("/hubcloud")
 def endpoint_hubcloud(url: str = "", dl: bool = False, payload: Optional[UrlPayload] = None):
     target = payload.url if payload else url
     if not target:
-        raise HTTPException(status_code=400, detail="Missing required 'url' parameter")
+        return JSONResponse(status_code=200, content={"success": False, "error": "Missing required 'url' parameter"})
     try:
         res = resolve_hubcloud(target)
         if (payload.dl if payload else dl) and res.get("url"):
             return RedirectResponse(url=res["url"], status_code=302)
         return res
     except Exception as e:
-        return JSONResponse(status_code=400, content={"success": False, "error": str(e)})
+        return JSONResponse(status_code=200, content={"success": False, "error": str(e)})
 
 @router.get("/gdflix")
 @router.post("/gdflix")
 def endpoint_gdflix(url: str = "", dl: bool = False, payload: Optional[UrlPayload] = None):
     target = payload.url if payload else url
     if not target:
-        raise HTTPException(status_code=400, detail="Missing required 'url' parameter")
+        return JSONResponse(status_code=200, content={"success": False, "error": "Missing required 'url' parameter"})
     try:
         res = resolve_gdflix(target)
         if (payload.dl if payload else dl) and res.get("url"):
             return RedirectResponse(url=res["url"], status_code=302)
         return res
     except Exception as e:
-        return JSONResponse(status_code=400, content={"success": False, "error": str(e)})
+        return JSONResponse(status_code=200, content={"success": False, "error": str(e)})
 
 @router.get("/gofile")
 @router.post("/gofile")
@@ -189,84 +189,84 @@ def endpoint_gofile(url: str = "", dl: bool = False, password: str = "", payload
     target = payload.url if payload else url
     pwd = (payload.password if payload else "") or password
     if not target:
-        raise HTTPException(status_code=400, detail="Missing required 'url' parameter")
+        return JSONResponse(status_code=200, content={"success": False, "error": "Missing required 'url' parameter"})
     try:
         res = resolve_gofile(target, password=pwd)
         if (payload.dl if payload else dl) and res.get("url"):
             return RedirectResponse(url=res["url"], status_code=302)
         return res
     except Exception as e:
-        return JSONResponse(status_code=400, content={"success": False, "error": str(e)})
+        return JSONResponse(status_code=200, content={"success": False, "error": str(e)})
 
 @router.get("/multicloud")
 @router.post("/multicloud")
 def endpoint_multicloud(url: str = "", dl: bool = False, payload: Optional[UrlPayload] = None):
     target = payload.url if payload else url
     if not target:
-        raise HTTPException(status_code=400, detail="Missing required 'url' parameter")
+        return JSONResponse(status_code=200, content={"success": False, "error": "Missing required 'url' parameter"})
     try:
         res = resolve_multicloud(target)
         if (payload.dl if payload else dl) and res.get("url"):
             return RedirectResponse(url=res["url"], status_code=302)
         return res
     except Exception as e:
-        return JSONResponse(status_code=400, content={"success": False, "error": str(e)})
+        return JSONResponse(status_code=200, content={"success": False, "error": str(e)})
 
 @router.get("/gdxfiles")
 @router.post("/gdxfiles")
 def endpoint_gdxfiles(url: str = "", dl: bool = False, payload: Optional[UrlPayload] = None):
     target = payload.url if payload else url
     if not target:
-        raise HTTPException(status_code=400, detail="Missing required 'url' parameter")
+        return JSONResponse(status_code=200, content={"success": False, "error": "Missing required 'url' parameter"})
     try:
         res = resolve_gdxfiles(target)
         if (payload.dl if payload else dl) and res.get("url"):
             return RedirectResponse(url=res["url"], status_code=302)
         return res
     except Exception as e:
-        return JSONResponse(status_code=400, content={"success": False, "error": str(e)})
+        return JSONResponse(status_code=200, content={"success": False, "error": str(e)})
 
 @router.get("/driveseed")
 @router.post("/driveseed")
 def endpoint_driveseed(url: str = "", dl: bool = False, payload: Optional[UrlPayload] = None):
     target = payload.url if payload else url
     if not target:
-        raise HTTPException(status_code=400, detail="Missing required 'url' parameter")
+        return JSONResponse(status_code=200, content={"success": False, "error": "Missing required 'url' parameter"})
     try:
         res = resolve_driveseed(target)
         if (payload.dl if payload else dl) and res.get("url"):
             return RedirectResponse(url=res["url"], status_code=302)
         return res
     except Exception as e:
-        return JSONResponse(status_code=400, content={"success": False, "error": str(e)})
+        return JSONResponse(status_code=200, content={"success": False, "error": str(e)})
 
 @router.get("/hubdrive")
 @router.post("/hubdrive")
 def endpoint_hubdrive(url: str = "", dl: bool = False, payload: Optional[UrlPayload] = None):
     target = payload.url if payload else url
     if not target:
-        raise HTTPException(status_code=400, detail="Missing required 'url' parameter")
+        return JSONResponse(status_code=200, content={"success": False, "error": "Missing required 'url' parameter"})
     try:
         res = resolve_driveseed(target)
         if (payload.dl if payload else dl) and res.get("url"):
             return RedirectResponse(url=res["url"], status_code=302)
         return res
     except Exception as e:
-        return JSONResponse(status_code=400, content={"success": False, "error": str(e)})
+        return JSONResponse(status_code=200, content={"success": False, "error": str(e)})
 
 @router.get("/vcloud")
 @router.post("/vcloud")
 def endpoint_vcloud(url: str = "", dl: bool = False, payload: Optional[UrlPayload] = None):
     target = payload.url if payload else url
     if not target:
-        raise HTTPException(status_code=400, detail="Missing required 'url' parameter")
+        return JSONResponse(status_code=200, content={"success": False, "error": "Missing required 'url' parameter"})
     try:
         res = resolve_vcloud(target)
         if (payload.dl if payload else dl) and res.get("url"):
             return RedirectResponse(url=res["url"], status_code=302)
         return res
     except Exception as e:
-        return JSONResponse(status_code=400, content={"success": False, "error": str(e)})
+        return JSONResponse(status_code=200, content={"success": False, "error": str(e)})
 
 # Register router at root / and prefix /api
 app.include_router(router)
@@ -319,4 +319,4 @@ async def catch_all_fallback(full_path: str, request: Request):
             return RedirectResponse(url=res["url"], status_code=302)
         return res
     except Exception as e:
-        return JSONResponse(status_code=400, content={"success": False, "error": str(e)})
+        return JSONResponse(status_code=200, content={"success": False, "error": str(e)})

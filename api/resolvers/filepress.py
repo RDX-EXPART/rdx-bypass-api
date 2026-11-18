@@ -56,10 +56,13 @@ def resolve_filepress(url: str, cookie: str = "") -> dict:
     # If cookie not passed, check environment variable FILEPRESS_COOKIE
     effective_cookie = _normalize_cookie(cookie) or _normalize_cookie(os.environ.get("FILEPRESS_COOKIE", ""))
 
+    origin = f"{raw.scheme}://{raw.netloc}" if raw.netloc else "https://new4.filepress.lat"
+    bases = [origin] + [b for b in FILEPRESS_BASES if b != origin]
+
     headers = {
         "User-Agent": USER_AGENT,
-        "Referer": f"https://new4.filepress.lat/file/{file_id}",
-        "Origin": "https://new4.filepress.lat",
+        "Referer": f"{origin}/file/{file_id}",
+        "Origin": origin,
         "Content-Type": "application/json",
         "Accept": "application/json, text/plain, */*",
     }
@@ -130,7 +133,7 @@ def resolve_filepress(url: str, cookie: str = "") -> dict:
     gdrive_link = None
 
     # 1. Index Download (Index step 1 + step 2)
-    for base in FILEPRESS_BASES:
+    for base in bases:
         api1 = f"{base}/api/file/downlaod/"
         api2 = f"{base}/api/file/downlaod2/"
         j1 = _post(api1, {"id": file_id, "method": "indexDownlaod"}, timeout=12)
@@ -151,7 +154,7 @@ def resolve_filepress(url: str, cookie: str = "") -> dict:
             break
 
     # 2. StreamTape Download
-    for base in FILEPRESS_BASES:
+    for base in bases:
         api1 = f"{base}/api/file/downlaod/"
         j_st = _post(api1, {"id": file_id, "method": "streamTapeDownload"}, timeout=10)
         if j_st and j_st.get("status") and j_st.get("data"):
@@ -167,7 +170,7 @@ def resolve_filepress(url: str, cookie: str = "") -> dict:
 
     # 3. Alternative Mirrors (DoodStream / StreamWish)
     for method in ["doodStreamDownload", "streamWishDownload"]:
-        for base in FILEPRESS_BASES:
+        for base in bases:
             j_alt = _post(f"{base}/api/file/downlaod/", {"id": file_id, "method": method}, timeout=8)
             if j_alt and j_alt.get("status") and j_alt.get("data"):
                 val = _first_url(j_alt["data"]) or (j_alt["data"] if isinstance(j_alt["data"], str) and j_alt["data"].startswith("http") else None)
@@ -180,7 +183,7 @@ def resolve_filepress(url: str, cookie: str = "") -> dict:
         methods = ["publicDownlaod"]
         if effective_cookie:
             methods.insert(0, "publicUserDownlaod")
-        for base in FILEPRESS_BASES:
+        for base in bases:
             api1 = f"{base}/api/file/downlaod/"
             api2 = f"{base}/api/file/downlaod2/"
             for method in methods:
