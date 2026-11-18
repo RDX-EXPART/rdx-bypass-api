@@ -1,5 +1,6 @@
 import os
 import re
+import base64
 import logging
 from urllib.parse import urlparse
 import requests
@@ -45,8 +46,53 @@ def _normalize_cookie(raw: str) -> str:
         return "; ".join(clean_pairs)
     return raw
 
+def _extract_gdrive_id(val) -> str | None:
+    if not val:
+        return None
+    if isinstance(val, list):
+        for item in val:
+            gid = _extract_gdrive_id(item)
+            if gid:
+                return gid
+        return None
+    if not isinstance(val, str):
+        return None
+    val = val.strip()
+
+    # 1. Direct Google Drive URL
+    m = re.search(r"drive\.google\.com/(?:file/d/|open\?id=|uc\?id=)([a-zA-Z0-9_-]{20,50})", val)
+    if m:
+        return m.group(1)
+
+    # 2. Flapdooodle or Index URL containing base64 token in path (/download/<token>/...)
+    m = re.search(r"/download/([a-zA-Z0-9+/=_-]+)", val)
+    token = m.group(1) if m else val
+    try:
+        padded = token + "=" * (-len(token) % 4)
+        decoded = base64.b64decode(padded).decode("utf-8", errors="ignore")
+        parts = decoded.split("@")
+        if parts and re.match(r"^[a-zA-Z0-9_-]{20,50}$", parts[0]):
+            return parts[0]
+    except Exception:
+        pass
+
+    # 3. Raw Google Drive ID (standard 33-char or 25-50 char, but NOT a 24-char hex MongoDB ObjectId)
+    if re.match(r"^[a-zA-Z0-9_-]{25,50}$", val) and not re.match(r"^[a-fA-F0-9]{24}$", val):
+        return val
+
+    return None
+
+def _first_url(val):
+    if isinstance(val, list):
+        for v in val:
+            if isinstance(v, str) and v.startswith("http"):
+                return v
+    if isinstance(val, str) and val.startswith("http"):
+        return val
+    return None
+
 def resolve_filepress(url: str, cookie: str = "") -> dict:
-    """Resolve Filepress / Filebee link directly into Google Drive download link."""
+    """Resolve Filepress / Filebee link directly into Google Drive download link without requiring cookies."""
     raw = urlparse(url)
     file_id = raw.path.strip("/").split("/")[-1].split("?")[0].split("#")[0]
     if not file_id:
@@ -55,7 +101,12 @@ def resolve_filepress(url: str, cookie: str = "") -> dict:
     effective_cookie = _normalize_cookie(cookie) or _normalize_cookie(os.environ.get("FILEPRESS_COOKIE", ""))
 
     origin = f"{raw.scheme}://{raw.netloc}" if raw.netloc else "https://new4.filepress.lat"
-    bases = [origin] + [b for b in FILEPRESS_BASES if b != origin]
+    bases = ["https://new4.filepress.lat"]
+    if origin not in bases:
+        bases.insert(0, origin)
+    for b in FILEPRESS_BASES:
+        if b not in bases:
+            bases.append(b)
 
     headers = {
         "User-Agent": USER_AGENT,
@@ -114,17 +165,17 @@ def resolve_filepress(url: str, cookie: str = "") -> dict:
             logger.debug("requests POST %s failed: %s", endpoint, e)
         return None
 
-    def _first_url(val):
-        if isinstance(val, list):
-            for v in val:
-                if isinstance(v, str) and v.startswith("http"):
-                    return v
-        if isinstance(val, str) and val.startswith("http"):
-            return val
-        return None
-
     gdrive_link = None
-    methods = ["publicUserDownlaod", "publicDownlaod"] if effective_cookie else ["publicDownlaod", "publicUserDownlaod"]
+    index_link = None
+    streamtape_raw = None
+
+    # Priority of methods to obtain Google Drive link without requiring cookies:
+    # 1. publicDownlaod (guest direct Google Drive download)
+    # 2. indexDownlaod (index download containing embedded base64 Google Drive file ID)
+    # 3. publicUserDownlaod (authenticated user Google Drive download, if cookie is provided)
+    methods = ["publicDownlaod", "indexDownlaod"]
+    if effective_cookie:
+        methods.insert(0, "publicUserDownlaod")
 
     for base in bases:
         api1 = f"{base}/api/file/downlaod/"
@@ -133,42 +184,60 @@ def resolve_filepress(url: str, cookie: str = "") -> dict:
             j_gd = _post(api1, {"id": file_id, "method": method}, timeout=12)
             if j_gd and j_gd.get("status") and j_gd.get("data"):
                 tok = j_gd["data"]
-                val = _first_url(tok)
-                if val:
-                    gdrive_link = val
+                gid = _extract_gdrive_id(tok)
+                if gid:
+                    gdrive_link = f"https://drive.google.com/uc?id={gid}&export=download"
                     break
-                # Step 2: MongoDB ObjectId to Google Drive ID
-                j_gd2 = _post(api2, {"id": tok, "method": method}, timeout=10)
-                if j_gd2 and j_gd2.get("status") and j_gd2.get("data"):
-                    gd2_val = _first_url(j_gd2["data"]) or j_gd2["data"]
-                    if isinstance(gd2_val, str) and gd2_val.startswith("http"):
-                        gdrive_link = gd2_val
-                        break
-                    elif isinstance(gd2_val, str) and len(gd2_val) >= 20:
-                        gdrive_link = f"https://drive.google.com/uc?id={gd2_val}&export=download"
-                        break
+                # Step 2: MongoDB ObjectId -> Direct Google Drive ID or Flapdooodle Index URL
+                first_tok = tok[0] if isinstance(tok, list) and tok else tok
+                if isinstance(first_tok, str):
+                    j_gd2 = _post(api2, {"id": first_tok, "method": method}, timeout=10)
+                    if j_gd2 and j_gd2.get("status") and j_gd2.get("data"):
+                        tok2 = j_gd2["data"]
+                        gid2 = _extract_gdrive_id(tok2)
+                        if gid2:
+                            gdrive_link = f"https://drive.google.com/uc?id={gid2}&export=download"
+                            break
+                        if method == "indexDownlaod":
+                            idx_u = _first_url(tok2)
+                            if idx_u:
+                                index_link = idx_u
             if gdrive_link:
                 break
         if gdrive_link:
             break
 
+    # If Google Drive link wasn't resolved, attempt StreamTape mirror as fallback
     if not gdrive_link:
+        for base in bases:
+            j_st = _post(f"{base}/api/file/downlaod/", {"id": file_id, "method": "streamTapeDownload"}, timeout=8)
+            if j_st and j_st.get("status") and j_st.get("data"):
+                st_val = _first_url(j_st["data"]) or (j_st["data"] if isinstance(j_st["data"], str) and j_st["data"].startswith("http") else None)
+                if st_val:
+                    streamtape_raw = st_val
+                    break
+
+    links = {}
+    if gdrive_link:
+        links["GoogleDrive"] = gdrive_link
+    if index_link:
+        links["Index"] = index_link
+        links["Direct"] = index_link
+    if streamtape_raw:
+        links["StreamTape"] = streamtape_raw
+
+    primary = gdrive_link or index_link or streamtape_raw
+    if not primary:
         if last_err_code == "FILE_NOT_FOUND":
             raise ValueError("Filepress error: File not found or deleted on Filepress (FILE_NOT_FOUND)")
-        if last_err_code == "DRIVE_NOT_CONNECTED":
-            raise ValueError("Filepress error: Google Drive is not connected to your Filepress account! (DRIVE_NOT_CONNECTED)")
-        if last_err_code == "LOGIN_REQUIRED" or (not effective_cookie and last_err_code == "METHOD_NOT_FOUND"):
-            raise ValueError("Filepress error: Login cookie required for this file! Upload your Filepress cookies as private file 'filepress.txt' (/bsetting -> Private Files) or set FILEPRESS_COOKIE.")
-        err_msg = last_err_msg or last_err_code or "Failed to generate Google Drive link"
+        err_msg = last_err_msg or last_err_code or "Failed to generate download link from Filepress"
         raise ValueError(f"Filepress error: {err_msg}")
 
     return {
         "success": True,
-        "url": gdrive_link,
-        "direct_url": gdrive_link,
+        "url": primary,
+        "direct_url": gdrive_link or primary,
         "gdrive_url": gdrive_link,
         "file_id": file_id,
-        "links": {
-            "GoogleDrive": gdrive_link
-        },
+        "links": links,
     }
