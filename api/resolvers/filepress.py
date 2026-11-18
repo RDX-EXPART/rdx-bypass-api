@@ -169,11 +169,9 @@ def resolve_filepress(url: str, cookie: str = "") -> dict:
             st_val = _first_url(j_st["data"]) or (j_st["data"] if isinstance(j_st["data"], str) and j_st["data"].startswith("http") else None)
             if st_val:
                 streamtape_raw = st_val
-                try:
-                    streamtape_link = resolve_streamtape(st_val, timeout=10)
-                except Exception as err:
-                    logger.debug("StreamTape extraction failed: %s", err)
-                    streamtape_link = st_val
+                # Do NOT pre-resolve StreamTape on Vercel because StreamTape links (get_video?id=...&token=...&ip=...)
+                # are IP-locked to the requester's IP! If resolved on Vercel, client/bot requests get HTTP 403.
+                # Returning streamtape_raw (https://streamtape.to/v/{id}) allows the client/bot to resolve it locally with its own IP.
                 break
 
     # 3. Alternative Mirrors (DoodStream / StreamWish)
@@ -224,15 +222,13 @@ def resolve_filepress(url: str, cookie: str = "") -> dict:
     if valid_index:
         links["Direct"] = valid_index
         links["Index"] = valid_index
-    if streamtape_link:
-        links["StreamTape_Direct"] = streamtape_link
     if streamtape_raw:
         links["StreamTape"] = streamtape_raw
     for k, v in alt_links.items():
         if v and _is_valid_index_url(v):
             links[k] = v
 
-    primary = gdrive_link or valid_index or streamtape_link or streamtape_raw or next((v for v in alt_links.values() if v and _is_valid_index_url(v)), None)
+    primary = gdrive_link or valid_index or streamtape_raw or next((v for v in alt_links.values() if v and _is_valid_index_url(v)), None)
     if not primary:
         if last_err_code == "FILE_NOT_FOUND":
             raise ValueError("Filepress error: File not found or deleted on Filepress (FILE_NOT_FOUND)")
@@ -251,8 +247,8 @@ def resolve_filepress(url: str, cookie: str = "") -> dict:
     return {
         "success": True,
         "url": primary,
-        "direct_url": gdrive_link or valid_index or streamtape_link or primary,
-        "streamtape_url": streamtape_link or streamtape_raw,
+        "direct_url": gdrive_link or valid_index or streamtape_raw or primary,
+        "streamtape_url": streamtape_raw,
         "gdrive_url": gdrive_link,
         "file_id": file_id,
         "links": links,
