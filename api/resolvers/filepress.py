@@ -2,8 +2,10 @@ import os
 import re
 import base64
 import logging
+import urllib.request
 from urllib.parse import urlparse
 import requests
+from .streamtape import resolve_streamtape
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +84,34 @@ def _extract_gdrive_id(val) -> str | None:
 
     return None
 
+def _is_gdrive_public(gdrive_id: str, timeout: int = 4) -> bool:
+    """Check if Google Drive export link is accessible without requiring 'Request Access'."""
+    try:
+        url = f"https://drive.google.com/uc?id={gdrive_id}&export=download"
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+
+        class _NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                if "accounts.google.com" in newurl or "ServiceLogin" in newurl:
+                    return None
+                return urllib.request.HTTPRedirectHandler.redirect_request(self, req, fp, code, msg, headers, newurl)
+
+        opener = urllib.request.build_opener(_NoRedirect)
+        with opener.open(req, timeout=timeout) as resp:
+            content = resp.read(2048).decode("utf-8", errors="ignore")
+            final_url = resp.geturl()
+            if "accounts.google.com" in final_url or "ServiceLogin" in final_url:
+                return False
+            if "Sign in" in content and "request-storage-access" in content:
+                return False
+            return True
+    except urllib.error.HTTPError as e:
+        if e.code in (302, 303) and ("accounts.google.com" in e.headers.get("Location", "") or "ServiceLogin" in e.headers.get("Location", "")):
+            return False
+        return False
+    except Exception:
+        return False
+
 def _first_url(val):
     if isinstance(val, list):
         for v in val:
@@ -92,7 +122,7 @@ def _first_url(val):
     return None
 
 def resolve_filepress(url: str, cookie: str = "") -> dict:
-    """Resolve Filepress / Filebee link directly into Google Drive download link without requiring cookies."""
+    """Resolve Filepress / Filebee link into both Direct and Google Drive download links."""
     raw = urlparse(url)
     file_id = raw.path.strip("/").split("/")[-1].split("?")[0].split("#")[0]
     if not file_id:
@@ -166,67 +196,118 @@ def resolve_filepress(url: str, cookie: str = "") -> dict:
         return None
 
     gdrive_link = None
+    gdrive_public = False
     index_link = None
     streamtape_raw = None
+    streamtape_direct = None
 
-    # Priority of methods to obtain Google Drive link without requiring cookies:
-    # 1. publicDownlaod (guest direct Google Drive download)
-    # 2. indexDownlaod (index download containing embedded base64 Google Drive file ID)
-    # 3. publicUserDownlaod (authenticated user Google Drive download, if cookie is provided)
-    methods = ["publicDownlaod", "indexDownlaod"]
-    if effective_cookie:
-        methods.insert(0, "publicUserDownlaod")
-
+    # 1. Query publicDownlaod (guest direct Google Drive download)
     for base in bases:
         api1 = f"{base}/api/file/downlaod/"
         api2 = f"{base}/api/file/downlaod2/"
-        for method in methods:
-            j_gd = _post(api1, {"id": file_id, "method": method}, timeout=12)
-            if j_gd and j_gd.get("status") and j_gd.get("data"):
-                tok = j_gd["data"]
-                gid = _extract_gdrive_id(tok)
-                if gid:
-                    gdrive_link = f"https://drive.google.com/uc?id={gid}&export=download"
-                    break
-                # Step 2: MongoDB ObjectId -> Direct Google Drive ID or Flapdooodle Index URL
-                first_tok = tok[0] if isinstance(tok, list) and tok else tok
-                if isinstance(first_tok, str):
-                    j_gd2 = _post(api2, {"id": first_tok, "method": method}, timeout=10)
-                    if j_gd2 and j_gd2.get("status") and j_gd2.get("data"):
-                        tok2 = j_gd2["data"]
-                        gid2 = _extract_gdrive_id(tok2)
-                        if gid2:
-                            gdrive_link = f"https://drive.google.com/uc?id={gid2}&export=download"
-                            break
-                        if method == "indexDownlaod":
-                            idx_u = _first_url(tok2)
-                            if idx_u:
-                                index_link = idx_u
-            if gdrive_link:
+        j_gd = _post(api1, {"id": file_id, "method": "publicDownlaod"}, timeout=12)
+        if j_gd and j_gd.get("status") and j_gd.get("data"):
+            tok = j_gd["data"]
+            gid = _extract_gdrive_id(tok)
+            if gid:
+                gdrive_link = f"https://drive.google.com/uc?id={gid}&export=download"
+                gdrive_public = _is_gdrive_public(gid)
                 break
+            first_tok = tok[0] if isinstance(tok, list) and tok else tok
+            if isinstance(first_tok, str):
+                j_gd2 = _post(api2, {"id": first_tok, "method": "publicDownlaod"}, timeout=10)
+                if j_gd2 and j_gd2.get("status") and j_gd2.get("data"):
+                    gid2 = _extract_gdrive_id(j_gd2["data"])
+                    if gid2:
+                        gdrive_link = f"https://drive.google.com/uc?id={gid2}&export=download"
+                        gdrive_public = _is_gdrive_public(gid2)
+                        break
         if gdrive_link:
             break
 
-    # If Google Drive link wasn't resolved, attempt StreamTape mirror as fallback
-    if not gdrive_link:
-        for base in bases:
-            j_st = _post(f"{base}/api/file/downlaod/", {"id": file_id, "method": "streamTapeDownload"}, timeout=8)
-            if j_st and j_st.get("status") and j_st.get("data"):
-                st_val = _first_url(j_st["data"]) or (j_st["data"] if isinstance(j_st["data"], str) and j_st["data"].startswith("http") else None)
-                if st_val:
-                    streamtape_raw = st_val
-                    break
+    # 2. Query indexDownlaod (index direct mirror + fallback Google Drive ID)
+    for base in bases:
+        api1 = f"{base}/api/file/downlaod/"
+        api2 = f"{base}/api/file/downlaod2/"
+        j_idx = _post(api1, {"id": file_id, "method": "indexDownlaod"}, timeout=12)
+        if j_idx and j_idx.get("status") and j_idx.get("data"):
+            tok = j_idx["data"]
+            first_tok = tok[0] if isinstance(tok, list) and tok else tok
+            if isinstance(first_tok, str):
+                j_idx2 = _post(api2, {"id": first_tok, "method": "indexDownlaod"}, timeout=10)
+                if j_idx2 and j_idx2.get("status") and j_idx2.get("data"):
+                    tok2 = j_idx2["data"]
+                    u = _first_url(tok2)
+                    if u:
+                        index_link = u
+                    if not gdrive_link:
+                        gid = _extract_gdrive_id(tok2)
+                        if gid:
+                            gdrive_link = f"https://drive.google.com/uc?id={gid}&export=download"
+                            gdrive_public = _is_gdrive_public(gid)
+        if index_link:
+            break
 
+    # 3. Query StreamTape download mirror
+    for base in bases:
+        api1 = f"{base}/api/file/downlaod/"
+        j_st = _post(api1, {"id": file_id, "method": "streamTapeDownload"}, timeout=8)
+        if j_st and j_st.get("status") and j_st.get("data"):
+            st_val = _first_url(j_st["data"]) or (j_st["data"] if isinstance(j_st["data"], str) and j_st["data"].startswith("http") else None)
+            if st_val:
+                streamtape_raw = st_val
+                try:
+                    streamtape_direct = resolve_streamtape(st_val, timeout=8)
+                except Exception as err:
+                    logger.debug("StreamTape extraction failed: %s", err)
+                break
+
+    # 4. If cookie provided and still no gdrive_link, try publicUserDownlaod
+    if effective_cookie and not gdrive_link:
+        for base in bases:
+            api1 = f"{base}/api/file/downlaod/"
+            api2 = f"{base}/api/file/downlaod2/"
+            j_u = _post(api1, {"id": file_id, "method": "publicUserDownlaod"}, timeout=12)
+            if j_u and j_u.get("status") and j_u.get("data"):
+                tok = j_u["data"]
+                first_tok = tok[0] if isinstance(tok, list) and tok else tok
+                if isinstance(first_tok, str):
+                    j_u2 = _post(api2, {"id": first_tok, "method": "publicUserDownlaod"}, timeout=10)
+                    if j_u2 and j_u2.get("status") and j_u2.get("data"):
+                        gid = _extract_gdrive_id(j_u2["data"])
+                        if gid:
+                            gdrive_link = f"https://drive.google.com/uc?id={gid}&export=download"
+                            gdrive_public = _is_gdrive_public(gid)
+                            break
+            if gdrive_link:
+                break
+
+    # Build links dictionary
     links = {}
+    valid_index = index_link if index_link and "404page" not in index_link.lower() else None
+
+    # Determine Direct Link
+    direct_link = valid_index or streamtape_direct or streamtape_raw
+    if not direct_link and gdrive_link and gdrive_public:
+        direct_link = gdrive_link
+
+    if direct_link:
+        links["Direct"] = direct_link
     if gdrive_link:
         links["GoogleDrive"] = gdrive_link
-    if index_link:
-        links["Index"] = index_link
-        links["Direct"] = index_link
+    if valid_index:
+        links["Index"] = valid_index
+    elif index_link:
+        links["Index_Mirror"] = index_link
     if streamtape_raw:
         links["StreamTape"] = streamtape_raw
+    if streamtape_direct:
+        links["StreamTape_Direct"] = streamtape_direct
 
-    primary = gdrive_link or index_link or streamtape_raw
+    # Primary URL:
+    # If Google Drive is verified public, prefer Google Drive; otherwise prefer Direct/StreamTape link
+    primary = (gdrive_link if gdrive_link and gdrive_public else None) or direct_link or gdrive_link or streamtape_raw
+
     if not primary:
         if last_err_code == "FILE_NOT_FOUND":
             raise ValueError("Filepress error: File not found or deleted on Filepress (FILE_NOT_FOUND)")
@@ -236,8 +317,9 @@ def resolve_filepress(url: str, cookie: str = "") -> dict:
     return {
         "success": True,
         "url": primary,
-        "direct_url": gdrive_link or primary,
+        "direct_url": direct_link or primary,
         "gdrive_url": gdrive_link,
+        "streamtape_url": streamtape_raw,
         "file_id": file_id,
         "links": links,
     }
