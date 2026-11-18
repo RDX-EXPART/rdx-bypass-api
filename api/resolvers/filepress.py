@@ -46,6 +46,14 @@ def _normalize_cookie(raw: str) -> str:
         return "; ".join(clean_pairs)
     return raw
 
+def _is_valid_index_url(link: str) -> bool:
+    if not link or not isinstance(link, str) or not link.startswith("http"):
+        return False
+    lower = link.lower()
+    if "404page" in lower or "/404" in lower or "404." in lower:
+        return False
+    return True
+
 def resolve_filepress(url: str, cookie: str = "") -> dict:
     """Resolve Filepress / Filebee link into direct download links."""
     raw = urlparse(url)
@@ -140,14 +148,14 @@ def resolve_filepress(url: str, cookie: str = "") -> dict:
         if j1 and j1.get("status") and j1.get("data"):
             token = j1["data"]
             direct = _first_url(token)
-            if direct:
+            if direct and _is_valid_index_url(direct):
                 index_link = direct
                 break
             # Step 2
             j2 = _post(api2, {"id": token, "method": "indexDownlaod"}, timeout=12)
             if j2 and j2.get("status") and j2.get("data"):
                 direct2 = _first_url(j2["data"])
-                if direct2:
+                if direct2 and _is_valid_index_url(direct2):
                     index_link = direct2
                     break
         if index_link:
@@ -179,50 +187,52 @@ def resolve_filepress(url: str, cookie: str = "") -> dict:
                     break
 
     # 4. Google Drive Download (publicDownlaod works for guests; publicUserDownlaod works with cookie)
-    if not index_link and not streamtape_link:
-        methods = ["publicDownlaod"]
-        if effective_cookie:
-            methods.insert(0, "publicUserDownlaod")
-        for base in bases:
-            api1 = f"{base}/api/file/downlaod/"
-            api2 = f"{base}/api/file/downlaod2/"
-            for method in methods:
-                j_gd = _post(api1, {"id": file_id, "method": method}, timeout=12)
-                if j_gd and j_gd.get("status") and j_gd.get("data"):
-                    gd_val = _first_url(j_gd["data"])
-                    if gd_val:
-                        gdrive_link = gd_val
-                        break
-                    # 2-step MongoDB ID to Google Drive ID
-                    tok = j_gd["data"]
-                    j_gd2 = _post(api2, {"id": tok, "method": method}, timeout=10)
-                    if j_gd2 and j_gd2.get("status") and j_gd2.get("data"):
-                        gd2_val = _first_url(j_gd2["data"]) or j_gd2["data"]
-                        if isinstance(gd2_val, str) and gd2_val.startswith("http"):
-                            gdrive_link = gd2_val
-                            break
-                        elif isinstance(gd2_val, str) and len(gd2_val) >= 20:
-                            gdrive_link = f"https://drive.google.com/uc?id={gd2_val}&export=download"
-                            break
-                if gdrive_link:
+    methods = ["publicDownlaod"]
+    if effective_cookie:
+        methods.insert(0, "publicUserDownlaod")
+    for base in bases:
+        api1 = f"{base}/api/file/downlaod/"
+        api2 = f"{base}/api/file/downlaod2/"
+        for method in methods:
+            j_gd = _post(api1, {"id": file_id, "method": method}, timeout=12)
+            if j_gd and j_gd.get("status") and j_gd.get("data"):
+                gd_val = _first_url(j_gd["data"])
+                if gd_val and _is_valid_index_url(gd_val):
+                    gdrive_link = gd_val
                     break
+                # 2-step MongoDB ID to Google Drive ID
+                tok = j_gd["data"]
+                j_gd2 = _post(api2, {"id": tok, "method": method}, timeout=10)
+                if j_gd2 and j_gd2.get("status") and j_gd2.get("data"):
+                    gd2_val = _first_url(j_gd2["data"]) or j_gd2["data"]
+                    if isinstance(gd2_val, str) and gd2_val.startswith("http") and _is_valid_index_url(gd2_val):
+                        gdrive_link = gd2_val
+                        break
+                    elif isinstance(gd2_val, str) and len(gd2_val) >= 20:
+                        gdrive_link = f"https://drive.google.com/uc?id={gd2_val}&export=download"
+                        break
             if gdrive_link:
                 break
+        if gdrive_link:
+            break
+
+    valid_index = index_link if _is_valid_index_url(index_link) else None
 
     links = {}
-    if index_link:
-        links["Direct"] = index_link
-        links["Index"] = index_link
+    if gdrive_link:
+        links["GoogleDrive"] = gdrive_link
+    if valid_index:
+        links["Direct"] = valid_index
+        links["Index"] = valid_index
     if streamtape_link:
         links["StreamTape_Direct"] = streamtape_link
     if streamtape_raw:
         links["StreamTape"] = streamtape_raw
-    if gdrive_link:
-        links["GoogleDrive"] = gdrive_link
     for k, v in alt_links.items():
-        links[k] = v
+        if v and _is_valid_index_url(v):
+            links[k] = v
 
-    primary = index_link or streamtape_link or streamtape_raw or gdrive_link or next(iter(alt_links.values()), None)
+    primary = gdrive_link or valid_index or streamtape_link or streamtape_raw or next((v for v in alt_links.values() if v and _is_valid_index_url(v)), None)
     if not primary:
         if last_err_code == "FILE_NOT_FOUND":
             raise ValueError("Filepress error: File not found or deleted on Filepress (FILE_NOT_FOUND)")
@@ -241,7 +251,7 @@ def resolve_filepress(url: str, cookie: str = "") -> dict:
     return {
         "success": True,
         "url": primary,
-        "direct_url": index_link or primary,
+        "direct_url": gdrive_link or valid_index or streamtape_link or primary,
         "streamtape_url": streamtape_link or streamtape_raw,
         "gdrive_url": gdrive_link,
         "file_id": file_id,
