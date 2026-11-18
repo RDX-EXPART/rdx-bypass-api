@@ -175,12 +175,15 @@ def resolve_filepress(url: str, cookie: str = "") -> dict:
                     alt_links[method] = val
                     break
 
-    # 4. Google Drive Download (requires cookie)
-    if effective_cookie and not index_link and not streamtape_link:
+    # 4. Google Drive Download (publicDownlaod works for guests; publicUserDownlaod works with cookie)
+    if not index_link and not streamtape_link:
+        methods = ["publicDownlaod"]
+        if effective_cookie:
+            methods.insert(0, "publicUserDownlaod")
         for base in FILEPRESS_BASES:
             api1 = f"{base}/api/file/downlaod/"
             api2 = f"{base}/api/file/downlaod2/"
-            for method in ["publicUserDownlaod", "publicDownlaod"]:
+            for method in methods:
                 j_gd = _post(api1, {"id": file_id, "method": method}, timeout=12)
                 if j_gd and j_gd.get("status") and j_gd.get("data"):
                     gd_val = _first_url(j_gd["data"])
