@@ -63,7 +63,7 @@ async def _auto_route(url: str, cookie: str = "", password: str = "") -> dict:
         return resolve_driveseed(url)
     elif any(k in host for k in ("hubdrive", "hblinks", "drivehub")):
         return resolve_driveseed(url)
-    elif "vcloud" in host or "v-cloud" in host:
+    elif any(k in host for k in ("vcloud", "v-cloud", "fastdl.beer")):
         return resolve_vcloud(url)
     else:
         if "/file/" in path:
