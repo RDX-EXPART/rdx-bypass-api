@@ -16,14 +16,15 @@ from .resolvers.multicloud import resolve_multicloud
 from .resolvers.gdxfiles import resolve_gdxfiles
 from .resolvers.driveseed import resolve_driveseed
 from .resolvers.vcloud import resolve_vcloud
+from .resolvers.ouo import resolve_ouo_async, resolve_ouo
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("rdx-bypass")
 
 app = FastAPI(
     title="RDX Multi-Bypass API",
-    description="High-Speed Direct Download Link Resolver API for Filepress, HubCloud, GDFlix, GoFile, MultiCloud, GDXFiles, DriveSeed, HubDrive & V-Cloud",
-    version="2.0.0",
+    description="High-Speed Direct Download Link Resolver API for Filepress, HubCloud, GDFlix, GoFile, MultiCloud, GDXFiles, DriveSeed, HubDrive, V-Cloud & Ouo",
+    version="2.1.0",
 )
 
 app.add_middleware(
@@ -40,11 +41,13 @@ class UrlPayload(BaseModel):
     password: Optional[str] = ""
     dl: Optional[bool] = False
 
-def _auto_route(url: str, cookie: str = "", password: str = "") -> dict:
+async def _auto_route(url: str, cookie: str = "", password: str = "") -> dict:
     host = urlparse(url).netloc.lower()
     path = urlparse(url).path.lower()
 
-    if any(k in host for k in ("filepress", "filebee")):
+    if any(k in host for k in ("ouo.io", "ouo.press", "ouo.today", "ouo.site")):
+        return await resolve_ouo_async(url)
+    elif any(k in host for k in ("filepress", "filebee")):
         return resolve_filepress(url, cookie=cookie)
     elif any(k in host for k in ("hubcloud", "gamerxyt")) or "hubcloud.php" in url:
         return resolve_hubcloud(url)
@@ -73,11 +76,12 @@ router = APIRouter()
 def root():
     return {
         "name": "RDX Multi-Bypass API",
-        "version": "2.0.0",
+        "version": "2.1.0",
         "status": "online",
         "endpoints": {
             "auto_bypass": "/bypass?url=<link> (GET/POST)",
             "filepress": "/filepress?url=<link> (GET/POST)",
+            "ouo": "/ouo?url=<link> (GET/POST)",
             "hubcloud": "/hubcloud?url=<link> (GET/POST)",
             "gdflix": "/gdflix?url=<link> (GET/POST)",
             "gofile": "/gofile?url=<link> (GET/POST)",
@@ -101,9 +105,9 @@ def health():
     return {"status": "ok", "service": "RDX Multi-Bypass API"}
 
 @router.get("/bypass")
-def bypass_get(url: str = Query(..., description="Target file URL"), dl: bool = False, cookie: str = "", password: str = ""):
+async def bypass_get(url: str = Query(..., description="Target file URL"), dl: bool = False, cookie: str = "", password: str = ""):
     try:
-        res = _auto_route(url, cookie=cookie, password=password)
+        res = await _auto_route(url, cookie=cookie, password=password)
         if dl and res.get("url"):
             return RedirectResponse(url=res["url"], status_code=302)
         return res
@@ -112,14 +116,28 @@ def bypass_get(url: str = Query(..., description="Target file URL"), dl: bool = 
         return JSONResponse(status_code=400, content={"success": False, "error": str(e)})
 
 @router.post("/bypass")
-def bypass_post(payload: UrlPayload):
+async def bypass_post(payload: UrlPayload):
     try:
-        res = _auto_route(payload.url, cookie=payload.cookie or "", password=payload.password or "")
+        res = await _auto_route(payload.url, cookie=payload.cookie or "", password=payload.password or "")
         if payload.dl and res.get("url"):
             return RedirectResponse(url=res["url"], status_code=302)
         return res
     except Exception as e:
         logger.warning("Bypass failed for %s: %s", payload.url, e)
+        return JSONResponse(status_code=400, content={"success": False, "error": str(e)})
+
+@router.get("/ouo")
+@router.post("/ouo")
+async def endpoint_ouo(url: str = "", dl: bool = False, payload: Optional[UrlPayload] = None):
+    target = payload.url if payload else url
+    if not target:
+        raise HTTPException(status_code=400, detail="Missing required 'url' parameter")
+    try:
+        res = await resolve_ouo_async(target)
+        if (payload.dl if payload else dl) and res.get("url"):
+            return RedirectResponse(url=res["url"], status_code=302)
+        return res
+    except Exception as e:
         return JSONResponse(status_code=400, content={"success": False, "error": str(e)})
 
 @router.get("/filepress")
@@ -256,7 +274,7 @@ app.include_router(router, prefix="/api")
 
 # Catch-all fallback so no request path ever gets 404
 @app.api_route("/{full_path:path}", methods=["GET", "POST"])
-def catch_all_fallback(full_path: str, request: Request):
+async def catch_all_fallback(full_path: str, request: Request):
     cleaned = full_path.strip("/")
     for prefix in ("api/index.py", "index.py", "api"):
         if cleaned.startswith(prefix):
@@ -276,7 +294,9 @@ def catch_all_fallback(full_path: str, request: Request):
         return root()
 
     try:
-        if cleaned == "filepress":
+        if cleaned in ("ouo", "ouo.io", "ouo.press"):
+            res = await resolve_ouo_async(url)
+        elif cleaned == "filepress":
             res = resolve_filepress(url, cookie=cookie)
         elif cleaned == "hubcloud":
             res = resolve_hubcloud(url)
@@ -293,7 +313,7 @@ def catch_all_fallback(full_path: str, request: Request):
         elif cleaned == "vcloud":
             res = resolve_vcloud(url)
         else:
-            res = _auto_route(url, cookie=cookie, password=password)
+            res = await _auto_route(url, cookie=cookie, password=password)
 
         if dl and res.get("url"):
             return RedirectResponse(url=res["url"], status_code=302)
