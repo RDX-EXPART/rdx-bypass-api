@@ -3,7 +3,7 @@ import os
 from typing import Optional
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, APIRouter, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
@@ -22,7 +22,7 @@ logger = logging.getLogger("rdx-bypass")
 
 app = FastAPI(
     title="RDX Multi-Bypass API",
-    description="High-Speed Direct Download Link Resolver for Filepress, HubCloud, GDFlix, GoFile, MultiCloud, GDXFiles, DriveSeed, HubDrive & V-Cloud",
+    description="High-Speed Direct Download Link Resolver API for Filepress, HubCloud, GDFlix, GoFile, MultiCloud, GDXFiles, DriveSeed, HubDrive & V-Cloud",
     version="2.0.0",
 )
 
@@ -63,12 +63,13 @@ def _auto_route(url: str, cookie: str = "", password: str = "") -> dict:
     elif "vcloud" in host or "v-cloud" in host:
         return resolve_vcloud(url)
     else:
-        # Default try hubcloud or filepress
         if "/file/" in path:
             return resolve_filepress(url, cookie=cookie)
         return resolve_hubcloud(url)
 
-@app.get("/")
+router = APIRouter()
+
+@router.get("/")
 def root():
     return {
         "name": "RDX Multi-Bypass API",
@@ -95,11 +96,11 @@ def root():
         },
     }
 
-@app.get("/health")
+@router.get("/health")
 def health():
     return {"status": "ok", "service": "RDX Multi-Bypass API"}
 
-@app.get("/bypass")
+@router.get("/bypass")
 def bypass_get(url: str = Query(..., description="Target file URL"), dl: bool = False, cookie: str = "", password: str = ""):
     try:
         res = _auto_route(url, cookie=cookie, password=password)
@@ -110,7 +111,7 @@ def bypass_get(url: str = Query(..., description="Target file URL"), dl: bool = 
         logger.warning("Bypass failed for %s: %s", url, e)
         return JSONResponse(status_code=400, content={"success": False, "error": str(e)})
 
-@app.post("/bypass")
+@router.post("/bypass")
 def bypass_post(payload: UrlPayload):
     try:
         res = _auto_route(payload.url, cookie=payload.cookie or "", password=payload.password or "")
@@ -121,9 +122,8 @@ def bypass_post(payload: UrlPayload):
         logger.warning("Bypass failed for %s: %s", payload.url, e)
         return JSONResponse(status_code=400, content={"success": False, "error": str(e)})
 
-# Dedicated Endpoints
-@app.get("/filepress")
-@app.post("/filepress")
+@router.get("/filepress")
+@router.post("/filepress")
 def endpoint_filepress(url: str = "", dl: bool = False, cookie: str = "", payload: Optional[UrlPayload] = None):
     target = payload.url if payload else url
     ck = (payload.cookie if payload else "") or cookie
@@ -137,8 +137,8 @@ def endpoint_filepress(url: str = "", dl: bool = False, cookie: str = "", payloa
     except Exception as e:
         return JSONResponse(status_code=400, content={"success": False, "error": str(e)})
 
-@app.get("/hubcloud")
-@app.post("/hubcloud")
+@router.get("/hubcloud")
+@router.post("/hubcloud")
 def endpoint_hubcloud(url: str = "", dl: bool = False, payload: Optional[UrlPayload] = None):
     target = payload.url if payload else url
     if not target:
@@ -151,8 +151,8 @@ def endpoint_hubcloud(url: str = "", dl: bool = False, payload: Optional[UrlPayl
     except Exception as e:
         return JSONResponse(status_code=400, content={"success": False, "error": str(e)})
 
-@app.get("/gdflix")
-@app.post("/gdflix")
+@router.get("/gdflix")
+@router.post("/gdflix")
 def endpoint_gdflix(url: str = "", dl: bool = False, payload: Optional[UrlPayload] = None):
     target = payload.url if payload else url
     if not target:
@@ -165,8 +165,8 @@ def endpoint_gdflix(url: str = "", dl: bool = False, payload: Optional[UrlPayloa
     except Exception as e:
         return JSONResponse(status_code=400, content={"success": False, "error": str(e)})
 
-@app.get("/gofile")
-@app.post("/gofile")
+@router.get("/gofile")
+@router.post("/gofile")
 def endpoint_gofile(url: str = "", dl: bool = False, password: str = "", payload: Optional[UrlPayload] = None):
     target = payload.url if payload else url
     pwd = (payload.password if payload else "") or password
@@ -180,8 +180,8 @@ def endpoint_gofile(url: str = "", dl: bool = False, password: str = "", payload
     except Exception as e:
         return JSONResponse(status_code=400, content={"success": False, "error": str(e)})
 
-@app.get("/multicloud")
-@app.post("/multicloud")
+@router.get("/multicloud")
+@router.post("/multicloud")
 def endpoint_multicloud(url: str = "", dl: bool = False, payload: Optional[UrlPayload] = None):
     target = payload.url if payload else url
     if not target:
@@ -194,8 +194,8 @@ def endpoint_multicloud(url: str = "", dl: bool = False, payload: Optional[UrlPa
     except Exception as e:
         return JSONResponse(status_code=400, content={"success": False, "error": str(e)})
 
-@app.get("/gdxfiles")
-@app.post("/gdxfiles")
+@router.get("/gdxfiles")
+@router.post("/gdxfiles")
 def endpoint_gdxfiles(url: str = "", dl: bool = False, payload: Optional[UrlPayload] = None):
     target = payload.url if payload else url
     if not target:
@@ -208,8 +208,8 @@ def endpoint_gdxfiles(url: str = "", dl: bool = False, payload: Optional[UrlPayl
     except Exception as e:
         return JSONResponse(status_code=400, content={"success": False, "error": str(e)})
 
-@app.get("/driveseed")
-@app.post("/driveseed")
+@router.get("/driveseed")
+@router.post("/driveseed")
 def endpoint_driveseed(url: str = "", dl: bool = False, payload: Optional[UrlPayload] = None):
     target = payload.url if payload else url
     if not target:
@@ -222,8 +222,8 @@ def endpoint_driveseed(url: str = "", dl: bool = False, payload: Optional[UrlPay
     except Exception as e:
         return JSONResponse(status_code=400, content={"success": False, "error": str(e)})
 
-@app.get("/hubdrive")
-@app.post("/hubdrive")
+@router.get("/hubdrive")
+@router.post("/hubdrive")
 def endpoint_hubdrive(url: str = "", dl: bool = False, payload: Optional[UrlPayload] = None):
     target = payload.url if payload else url
     if not target:
@@ -236,8 +236,8 @@ def endpoint_hubdrive(url: str = "", dl: bool = False, payload: Optional[UrlPayl
     except Exception as e:
         return JSONResponse(status_code=400, content={"success": False, "error": str(e)})
 
-@app.get("/vcloud")
-@app.post("/vcloud")
+@router.get("/vcloud")
+@router.post("/vcloud")
 def endpoint_vcloud(url: str = "", dl: bool = False, payload: Optional[UrlPayload] = None):
     target = payload.url if payload else url
     if not target:
@@ -245,6 +245,57 @@ def endpoint_vcloud(url: str = "", dl: bool = False, payload: Optional[UrlPayloa
     try:
         res = resolve_vcloud(target)
         if (payload.dl if payload else dl) and res.get("url"):
+            return RedirectResponse(url=res["url"], status_code=302)
+        return res
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"success": False, "error": str(e)})
+
+# Register router at root / and prefix /api
+app.include_router(router)
+app.include_router(router, prefix="/api")
+
+# Catch-all fallback so no request path ever gets 404
+@app.api_route("/{full_path:path}", methods=["GET", "POST"])
+def catch_all_fallback(full_path: str, request: Request):
+    cleaned = full_path.strip("/")
+    for prefix in ("api/index.py", "index.py", "api"):
+        if cleaned.startswith(prefix):
+            cleaned = cleaned[len(prefix):].strip("/")
+
+    if not cleaned or cleaned == "":
+        return root()
+    elif cleaned == "health":
+        return health()
+
+    url = request.query_params.get("url", "")
+    dl = request.query_params.get("dl", "").lower() in ("true", "1")
+    cookie = request.query_params.get("cookie", "")
+    password = request.query_params.get("password", "")
+
+    if not url:
+        return root()
+
+    try:
+        if cleaned == "filepress":
+            res = resolve_filepress(url, cookie=cookie)
+        elif cleaned == "hubcloud":
+            res = resolve_hubcloud(url)
+        elif cleaned == "gdflix":
+            res = resolve_gdflix(url)
+        elif cleaned == "gofile":
+            res = resolve_gofile(url, password=password)
+        elif cleaned == "multicloud":
+            res = resolve_multicloud(url)
+        elif cleaned == "gdxfiles":
+            res = resolve_gdxfiles(url)
+        elif cleaned in ("driveseed", "hubdrive"):
+            res = resolve_driveseed(url)
+        elif cleaned == "vcloud":
+            res = resolve_vcloud(url)
+        else:
+            res = _auto_route(url, cookie=cookie, password=password)
+
+        if dl and res.get("url"):
             return RedirectResponse(url=res["url"], status_code=302)
         return res
     except Exception as e:
