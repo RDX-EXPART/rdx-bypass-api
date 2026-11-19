@@ -718,13 +718,12 @@ def bypass_vcloud(url):
     orig_netloc = parsed_orig.netloc.lower()
     code = parsed_orig.path.strip("/").split("/")[-1]
 
-    # ─── Modern VCloud Direct Resolver (vcloud.you, vcloud.cx, etc.) ───
+    # ─── Modern VCloud Direct Resolver (dl.php) ───
     ordered_d = []
     if any(k in orig_netloc for k in ("vcloud", "fastdl.beer")) and code and not code.startswith("?"):
-        domains = ["vcloud.you", "vcloud.cx", "vcloud.beer", parsed_orig.netloc]
+        domains = [parsed_orig.netloc, "vcloud.beer"]
         seen_d = set()
         ordered_d = [d for d in domains if d and not (d in seen_d or seen_d.add(d))]
-        last_vcloud_err = None
 
         for domain in ordered_d:
             page_url = f"https://{domain}/{code}"
@@ -738,48 +737,35 @@ def bypass_vcloud(url):
             }
             try:
                 if _HAS_CURL_CFFI:
-                    r_dl = _cf_get(dl_api_url, referer=page_url, extra_headers={"X-Requested-With": "XMLHttpRequest"}, timeout=10)
+                    r_dl = _cf_get(dl_api_url, referer=page_url, extra_headers={"X-Requested-With": "XMLHttpRequest"}, timeout=8)
                     if r_dl.status_code == 200:
                         res_json = r_dl.json()
-                    elif r_dl.status_code == 404:
-                        last_vcloud_err = "Download source not found"
-                        continue
-                    else:
-                        last_vcloud_err = f"HTTP {r_dl.status_code}"
-                        continue
+                        direct_url = res_json.get("url") or res_json.get("direct_url") or res_json.get("download_url")
+                        if direct_url:
+                            server_name = _detect_server_name("V-Cloud Direct", direct_url)
+                            return {
+                                "success": True,
+                                "source": url,
+                                "file_name": "VCloud_File",
+                                "servers": [{"name": server_name, "direct_url": direct_url, "source_url": url, "success": True}],
+                            }
                 else:
                     req = Request(dl_api_url, headers=headers)
-                    resp = _build_opener().open(req, timeout=10)
+                    resp = _build_opener().open(req, timeout=8)
                     data_text = resp.read().decode("utf-8", "replace")
                     resp.close()
                     res_json = json.loads(data_text)
-
-                direct_url = res_json.get("url") or res_json.get("direct_url") or res_json.get("download_url")
-                if direct_url:
-                    server_name = _detect_server_name("V-Cloud Direct", direct_url)
-                    return {
-                        "success": True,
-                        "source": url,
-                        "file_name": "VCloud_File",
-                        "servers": [{"name": server_name, "direct_url": direct_url, "source_url": url, "success": True}],
-                    }
-                if not res_json.get("ok") and res_json.get("error"):
-                    last_vcloud_err = res_json.get("error")
-            except HTTPError as he:
-                if he.code == 404:
-                    last_vcloud_err = "Download source not found"
-                else:
-                    last_vcloud_err = f"HTTP {he.code}"
-            except Exception as e:
-                last_vcloud_err = str(e)
-
-        if last_vcloud_err and "not found" in str(last_vcloud_err).lower():
-            return {
-                "success": False,
-                "source": url,
-                "tls_engine": _TLS_ENGINE,
-                "error": "File not found or expired on V-Cloud servers (404)",
-            }
+                    direct_url = res_json.get("url") or res_json.get("direct_url") or res_json.get("download_url")
+                    if direct_url:
+                        server_name = _detect_server_name("V-Cloud Direct", direct_url)
+                        return {
+                            "success": True,
+                            "source": url,
+                            "file_name": "VCloud_File",
+                            "servers": [{"name": server_name, "direct_url": direct_url, "source_url": url, "success": True}],
+                        }
+            except Exception:
+                pass
 
     sess = _cf_requests.Session() if _HAS_CURL_CFFI else None
     try:
